@@ -9,7 +9,16 @@ source /opt/webinoly/lib/general
 check_for_parameters $@
 api-events_update has
 
+
+# Only these commands are supported with subfolders
+if [[ -n $subfolder && -z $wp_admin && -z $path ]]; then
+	echo "${red}[ERROR] Subfolder option not supported!${end}"
+	exit 1
+fi
+
+
 [[ -z $empty_param && -z $h && -z $H && -z $help ]] && ! [[ -n $wp_admin && -z $domain ]] && check_for_nginx -ask
+
 
 # Check for domain.
 if [[ -n $domain && -f /etc/nginx/sites-available/$domain ]]; then
@@ -38,8 +47,8 @@ if [[ -n $add ]]; then
 	if [[ $add == true ]]; then
 		echo ""
 		read -p "${blu}HTTP-Auth User: ${end}" user
-		read -p "${blu}HTTP-Auth Password: ${end}" pass
-		echo ""
+		read -p "${blu}HTTP-Auth Password: ${hid}" pass
+		echo "${hidend}"
 	elif [[ $(echo "${add}" | cut -c-1) == "[" && $(echo "${add}" | rev | cut -c-1) == "]" ]]; then
 		# No need for check var lenght to prevent errors, the previous condition is enough in this case.
 		userdata=${add:1:-1}
@@ -87,7 +96,7 @@ elif [[ -n $delete ]]; then
 	sudo sed -i "/^$userpurge:/d" /etc/nginx/$authfile
 	
 	# Remove site-auth-file if empty.
-	if [[ -n $domain && -f /etc/nginx/$authfile && ! -s /etc/nginx/$authfile ]]; then
+	if [[ -n $domain && -f /etc/nginx/$authfile && ( ! -s /etc/nginx/$authfile || -z $(cat -v $authfile | grep -m 1 '[^[:space:]]')) ]]; then
 		sudo rm /etc/nginx/$authfile
 		sudo rm -rf /etc/nginx/apps.d/.htpasswd-www.$domain
 	fi
@@ -131,14 +140,6 @@ elif [[ -n $wp_admin ]]; then
 			echo "${gre}WordPress Admin HTTP Authentication for${blu} $domain$subfolder ${gre}is already disabled! ${end}"
 			nginx_not="true" # Nginx-Reload not-needed.
 		fi
-	elif [[ $wp_admin == "on" ]]; then
-		conf_write wp-admin-auth true
-		echo "${gre}WordPress Admin HTTP Authentication has been enabled! (global)${end}"
-		nginx_not="true" # Nginx-Reload not-needed.
-	elif [[ $wp_admin == "off" ]]; then
-		conf_write wp-admin-auth false
-		echo "${gre}WordPress Admin HTTP Authentication has been disabled! (global)${end}"
-		nginx_not="true" # Nginx-Reload not-needed.
 	else
 		echo "${red}[ERROR] Invalid value for wp-admin! ${end}"
 		exit 1
@@ -211,7 +212,7 @@ elif [[ -n $whitelist ]]; then
 			[[ -f /etc/nginx/apps.d/whitelist-acl.conf ]] && sudo sed -i "\#^allow ${whitelist};#d" /etc/nginx/apps.d/whitelist-acl.conf
 			
 			# Remove site-auth-file if empty.
-			[[ -f /etc/nginx/apps.d/whitelist-acl.conf && ! -s /etc/nginx/apps.d/whitelist-acl.conf ]] && sudo rm /etc/nginx/apps.d/whitelist-acl.conf
+			[[ -f /etc/nginx/apps.d/whitelist-acl.conf && ( ! -s /etc/nginx/apps.d/whitelist-acl.conf || -z $(cat -v /etc/nginx/apps.d/whitelist-acl.conf | grep -m 1 '[^[:space:]]')) ]] && sudo rm /etc/nginx/apps.d/whitelist-acl.conf
 			
 			echo "${gre}The IP address ${blu}'$whitelist'${gre} was successfully removed from whitelist!${end}"
 		else
@@ -241,7 +242,7 @@ elif [[ -n $path && -n $domain ]]; then
 			x="1"
 			while [[ -n $(echo $path | rev | cut -d'/' -f ${x}- -s | rev) ]]
 			do
-				if ! [[ $(is_subfolder $domain $(echo $path | rev | cut -d'/' -f ${x}- -s | rev)) =~ ^(true|false)$ ]]; then
+				if ! [[ $(is_subfolder $domain $(echo $path | rev | cut -d'/' -f ${x}- -s | rev)) =~ ^(true|false|empty)$ ]]; then
 					echo "${red}[ERROR] Subfolder parameter not found!${end}"
 					exit 1
 				fi
@@ -326,7 +327,7 @@ location $sign$path {
 		elif [[ $path =~ ^\/([A-Za-z0-9_\/\.\-]+)?$ ]]; then
 			if [[ -f /etc/nginx/apps.d/$domain-nginx.conf ]]; then
 				sudo sed -i "/^# Path: $(echo $path | sed "s#/#\\\/#g")/,/^# PathEnd/{/.*/d}" /etc/nginx/apps.d/$domain-nginx.conf
-				if [[ ! -s /etc/nginx/apps.d/$domain-nginx.conf ]]; then
+				if [[ -f /etc/nginx/apps.d/$domain-nginx.conf && ( ! -s /etc/nginx/apps.d/$domain-nginx.conf || -z $(cat -v /etc/nginx/apps.d/$domain-nginx.conf | grep -m 1 '[^[:space:]]')) ]]; then
 					sudo rm /etc/nginx/apps.d/$domain-nginx.conf
 					sudo sed -i "/$domain-nginx.conf;/d" /etc/nginx/sites-available/$domain
 				fi
@@ -375,7 +376,7 @@ elif [[ -n $list ]]; then
 		done
 		}
 	fi
-	[[ ! -s /etc/nginx/$authfile && -z $raw && $list != "raw" ]] && echo "${blu}[Empty] No users were found!${end}"
+	[[ ( ! -s /etc/nginx/$authfile || -z $(cat -v /etc/nginx/$authfile | grep -m 1 '[^[:space:]]')) && -z $raw && $list != "raw" ]] && echo "${blu}[Empty] No users were found!${end}"
 	echo ""
 	nginx_not="true" # Nginx-Reload not-needed.
 
@@ -388,4 +389,5 @@ else
 fi
 
 [[ $(conf_read nginx) == "true" && -z $nginx_not ]] && sudo systemctl reload nginx
+ads_donate
 api-events_update hae

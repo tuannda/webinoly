@@ -4,29 +4,55 @@
 # Check OS support
 distr=`echo $(lsb_release -i | cut -d':' -f 2)`
 osver=`echo $(lsb_release -c | cut -d':' -f 2)`
-if ! [[ $distr == "Ubuntu" && $osver =~ ^(bionic|focal)$ ]]; then
-	echo "$(tput setaf 1)"
-	echo "****************************************************************************"
-	echo "****  This OS is not supported by Webinoly and could not work properly  ****"
-	echo "****************************************************************************"
-	echo "$(tput sgr0)"
-	read -p "Press [Enter] key to Continue or [Ctrl+C] to Cancel..."
+
+# Check for custom version
+if [[ $2 == "-ver="* ]]; then
+	ver=$(echo "$2" | cut -d'=' -f 2 -s)
+	# Skip stadistics counters for dev and testing (custom version stats).
+	if [[ $(echo $ver | rev | cut -c-1) == "*" || $ver == "alpha" ]]; then
+		ver=${ver//'*'}
+		statskip="true"
+	fi
 fi
 
-# Check for BASH Shell
-# This is a very "shity" method, but checking if file exists is very reliable
-# If modified: this same script is in installer, general lib and verify
-ins_shell_tty=$(echo $(tty) | grep -Eo "pts/[0-9]+")
-if [[ -n $ins_shell_tty ]]; then
-	ins_shell_pid=$(ps -au | grep -E "${ins_shell_tty}[ ]+S[s]?[ ]+" | tail -n 1 | awk '{print $2}')
-	[[ -n $ins_shell_pid && -f /proc/$ins_shell_pid/cmdline ]] && ins_shell_current=$(tr -d '\000' < /proc/$ins_shell_pid/cmdline)
-	[[ -n $ins_shell_pid && -f /proc/$ins_shell_pid/status ]] && ins_shell_status=$(grep -Eo '^Name:.*bash.*' /proc/$ins_shell_pid/status) # Double check!!!
+# Supported: 22.04 Jammy and 20.04 Focal
+if [[ $distr != "Ubuntu" ]] || ! [[ $osver =~ ^(bionic|focal|jammy)$ ]]; then
+	echo "$(tput setaf 1)"
+	echo "[ERROR] This OS is not supported by Webinoly and could not work properly. $(tput dim)(${distr} '${osver}')"
+	echo "$(tput sgr0)"
+	sudo rm weby
+	exit 1
+
+# 18.04 Bionic can be installed before 1.17.0
+elif [[ $osver == "bionic" && $1 != "upd" && -n $ver && $(echo ${ver//'*'} | sed 's/\.//g') =~ ^[0-9]+$ && $(echo ${ver//'*'} | sed 's/\.//g') -ge 1170 ]]; then
+	echo "$(tput setaf 1)"
+	echo "[ERROR] Ubuntu 18.04 is not supported on this version of Webinoly!"
+	echo "$(tput sgr0)"
+	sudo rm weby
+	exit 1
+elif [[ $osver == "bionic" && $1 != "upd" && -n $ver && $(echo ${ver//'*'} | sed 's/\.//g') =~ ^[0-9]+$ && $(echo ${ver//'*'} | sed 's/\.//g') -lt 1170 ]]; then
+	echo "$(tput setaf 1)"
+	echo "[WARNING] You should consider a newer Ubuntu version! $(tput dim)(20.04 or 22.04 are recommended instead)"
+	echo "$(tput sgr0)"
 	
-	if [[ -n $ins_shell_current && $ins_shell_current != *"bash"* && -z $ins_shell_status ]]; then
-		echo "$(tput setaf 1)BASH Shell is required! $(tput dim)(${ins_shell_current}) $(tput sgr0)"
-		sudo rm weby
-		exit 1
-	fi
+# 18.04 Bionic just for updates, no new installations after 1.17.0
+elif [[ $osver == "bionic" && $1 != "upd" ]]; then
+	echo "$(tput setaf 1)"
+	echo "[ERROR] Ubuntu 18.04 is not supported for new installations! $(tput dim)(20.04 or 22.04 are recommended instead)"
+	echo "$(tput sgr0)"
+	sudo rm weby
+	exit 1
+
+# 22.04 Jammy is supported only after 1.16.6
+elif [[ $osver == "jammy" && -n $ver && $(echo ${ver//'*'} | sed 's/\.//g') =~ ^[0-9]+$ && $(echo ${ver//'*'} | sed 's/\.//g') -lt 1166 ]]; then
+	#jammy - 1.16.6
+	#focal - 1.12.0
+	#bionic - 1.4.2
+	echo "$(tput setaf 1)"
+	echo "[ERROR] Ubuntu 22.04 (Jammy) is not supported by this version!"
+	echo "$(tput sgr0)"
+	sudo rm weby
+	exit 1
 fi
 
 # Check for sudo/root privileges
@@ -79,14 +105,7 @@ fi
 
 
 # Download and install Webinoly
-if [[ $2 == "-ver="* ]]; then
-	ver=$(echo "$2" | cut -d'=' -f 2 -s)
-	# Skip stadistics counters for dev and testing (custom version stats).
-	if [[ $(echo $ver | rev | cut -c-1) == "*" || $ver == "alpha" ]]; then
-		ver=${ver//'*'}
-		statskip="true"
-	fi
-	
+if [[ -n $ver ]]; then
 	# Be sure we have a valid server response for the requested version
 	code=$(wget --server-response --spider https://qrok.es/webinoly?version=$ver 2>&1 | awk '/^  HTTP/{print $2}')
 	code="${code##*$'\n'}" # Get the last code (redirections)
@@ -94,6 +113,7 @@ if [[ $2 == "-ver="* ]]; then
 	if [[ $code == 200 ]]; then
 		sudo wget --timeout=15 -t 1 -qrO $HOME/webinoly.tar https://qrok.es/webinoly?version=$ver
 		[[ $ver == "beta" ]] && echo "$(tput setaf 1)[WARNING] You are installing a BETA version of Webinoly and it's not recommended for production enviroments.$(tput sgr0)"
+		type="Custom"
 	else
 		echo "$(tput setaf 1)[ERROR] Version not found or not available! ($code) $(tput sgr0)"
 		sudo rm weby
@@ -118,12 +138,8 @@ sudo mkdir -p /opt/webinoly/templates/source
 sudo find /opt/webinoly -type d -exec chmod 755 {} \;
 sudo find /opt/webinoly -type f -exec chmod 644 {} \;
 sudo chmod -f 744 /opt/webinoly/lib/ex-*
-
-# REMOVE when unsupported! (Only to maintain compatibility with versions before 1.16.0)
-[[ ! -d /opt/webinoly/usr ]] && usrw="/opt/webinoly/plugins" || usrw="/opt/webinoly/usr"
-
-sudo chmod 755 ${usrw}/*
-sudo mv ${usrw}/* /usr/bin/
+sudo chmod 755 /opt/webinoly/usr/*
+sudo mv /opt/webinoly/usr/* /usr/bin/
 
 source /opt/webinoly/lib/general
 
@@ -142,6 +158,19 @@ if [[ -f /opt/webinoly/webinoly.conf ]]; then
 	oldver=$(conf_read server-version)
 	newver=$svr_version
 	echo "${gre}${dim}Webinoly Configuration file was found, so we will use it!${end}"
+	
+	# Reinstall after uninstalled! (Can be considered new)
+	if [[ -z $update ]] && ! [[ $ver =~ ^(alpha|beta)$ ]]; then
+		new_install="true"
+		echo "${blu}${dim}It seems like you're reinstalling Webinoly! (Upgrading from: ${oldapp})${end} ${blu}${bol}Welcome back!!!${end}"
+	
+	# Downgrade!
+	elif [[ -n $update && $type == "Custom" ]]; then
+		echo "${blu}Updating to the latest version is always recommended! ${dim}(Downgrade to: ${ver})${end}"
+	fi
+	
+elif [[ $type == "Custom" ]]; then
+	echo "${blu}Custom version installed: ${ver}${end}"
 else
 	new_install="true"
 fi
@@ -150,7 +179,10 @@ fi
 # Write app version
 webyversion=$app_version
 conf_write app-version $webyversion
-[[ $ver =~ ^(alpha|beta)$ ]] && conf_write branch $ver
+if [[ $ver =~ ^(alpha|beta)$ ]]; then
+	conf_write branch $ver
+	echo "${blu}${bol}This is a testing version, please don't use it in production!${end}"
+fi
 
 
 # Ping to Webinoly Stats
@@ -162,19 +194,19 @@ if [[ $statskip != "true" ]]; then
 		type="New"
 	elif [[ $ver == "beta" ]]; then
 		type="Beta"
-	elif [[ -n $update && $ver =~ ^[0-9]{1}\.[0-9]{1,2}\.[0-9]{1,2}$ ]]; then
+	elif [[ -n $update && $type == "Custom" ]]; then
 		type="Downgrade"
-		webyversion=$(wget --timeout=10 -t 1 -qO- https://api.webinoly.com/check?text=true)
-		opt=$ver
-	elif [[ -n $setup && $ver =~ ^[0-9]{1}\.[0-9]{1,2}\.[0-9]{1,2}$ ]]; then
-		type="Custom"
 		webyversion=$(wget --timeout=10 -t 1 -qO- https://api.webinoly.com/check?text=true)
 		opt=$ver
 	elif [[ -n $update && -n $oldapp ]]; then
 		type="Updates"
 		opt=$oldapp
+	elif [[ $type == "Custom" ]]; then
+		webyversion=$(wget --timeout=10 -t 1 -qO- https://api.webinoly.com/check?text=true)
+		opt=$ver
 	else
 		type="Error"
+		conf_write init-error-flag true
 		echo "${red}[ERROR] Installation method not recognized!${end}"
 	fi
 
@@ -190,7 +222,13 @@ fi
 [[ $setup == 1 ]] && stack -nginx
 [[ $setup == 2 ]] && stack -php=nginx
 [[ $setup == 3 ]] && stack -lemp
-[[ $setup != [123] && -n $(conf_read stack-build-error-flag) ]] && sudo webinoly -verify=critical
+
+# Verify installation!
+if [[ $setup != [123] && -n $update && -n $oldapp ]]; then
+	sudo webinoly -verify=critical -check-for-updates
+elif [[ $setup != [123] ]]; then
+	sudo webinoly -verify=critical
+fi
 
 # Message Center
 if [[ -z $(conf_read stack-build-error-flag) ]]; then
@@ -201,7 +239,7 @@ if [[ -z $(conf_read stack-build-error-flag) ]]; then
 
 	if [[ -z $update ]]; then
 		echo ""
-		echo "${blu}${bol}Don't like our defaults? Every part of Webinoly is overrideable!${end}"
+		echo "${blu}${bol}Don't like our defaults? Every part of Webinoly is overridable!${end}"
 		echo "${blu}- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - "
 		echo "${blu}Please, read the documentation:${end}${dim} https://webinoly.com/documentation/${end}"
 		echo "${blu}Be sure your firewall ports are correctly set:${end}${dim} https://webinoly.com/install/${end}"

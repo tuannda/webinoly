@@ -2,29 +2,36 @@
 
 # Webinoly Server Manager Plugin
 # Syntax: webinoly <option> <argument>
-# Options: -update, -server-reset, -verify, -dbpass, -tools-port, -login-www-data, -cache-valid, -uninstall, -info, -external-sources-update, -clear-cache, -version, -blockip, -conf-value_, -default-site, -tools-site, -mysql-password, -smtp, -backup, -aws-s3-credentials, -db-import, -send-to-s3, -header-referrer, -header-hsts, -header-csp, -header-permissions-policy, -header-cache-control, -header-robots, -header-xfo, -header-xcto, -header-xssp, -custom-headers, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -email, -external-db-save, -export, -import, -db-role-default, -mysql-public-access
-# Arguments: -raw, -profile, -list, -bucket, -source, -delete, -run, -restore, -wp, -destination, -date, -s3-european-buckets, info, -file, -add-db-pre, -no-recovery, -recalculate, -dbname, -skip-db, -filename, -overwrite
+# Options: -update, -server-reset, -verify, -dbpass, -tools-port, -login-www-data, -cache-valid, -uninstall, -info, -external-sources-update, -clear-cache, -version, -blockip, -dynvar, -default-site, -tools-site, -mysql-password, -smtp, -backup, -aws-s3-credentials, -db-import, -send-to-s3, -custom-headers, -skip-cache, -skip-cookie-cache, -query-string-cache, -query-string-never-cache, -email, -export, -import, -mysql-public-access
+# Arguments: -raw, -profile, -list, -bucket, -source, -delete, -run, -restore, -wp, -destination, -date, -s3-european-buckets, info, -file, -add-db-pre, -no-recovery, -recalculate, -dbname, -skip-db, -filename, -overwrite, -value
 
 source /opt/webinoly/lib/webin
 source /opt/webinoly/lib/datadog
-source /opt/webinoly/lib/headers
 source /opt/webinoly/lib/verify
 source /opt/webinoly/lib/bkp
 check_for_parameters $@
 api-events_update wys
 
 
+# Only these commands are supported with subfolders
+if [[ -n $subfolder && -z $clear_cache && -z $backup ]]; then
+	echo "${red}[ERROR] Subfolder option not supported!${end}"
+	exit 1
+fi
+
+
 if [[ -n $update ]]; then
 	api-events_update wy1
 	webinoly_update
 	nginx_not="true" # Nginx-Reload not-needed.
+	ads_block="true" # Don't show ads
 	
 	
 elif [[ -n $server_reset ]]; then
 	api-events_update wy2
 	if [[ $server_reset == true ]]; then
 		server_reset="all"
-	elif ! [[ $server_reset =~ ^(all|nginx|php|mysql|permissions)$ ]]; then
+	elif ! [[ $server_reset =~ ^(all|os|nginx|php|mysql|permissions)$ ]]; then
 		echo "${red}[ERROR] Please, enter a valid option to update/reset your server configuration!${end}"
 		exit 1
 	fi
@@ -58,7 +65,7 @@ elif [[ -n $login_www_data ]]; then
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 	
-elif [[ -n $cache_valid || -n $config_cache ]]; then
+elif [[ -n $cache_valid ]]; then
 	config_fastcgi_cache
 
 	
@@ -66,7 +73,8 @@ elif [[ -n $uninstall ]]; then
 	api-events_update wy4
 	webinoly_uninstall
 	nginx_not="true" # Nginx-Reload not-needed.
-
+	ads_block="true" # Don't show ads
+	
 	
 elif [[ -n $external_sources_update ]]; then
 	external_sources_update
@@ -88,13 +96,20 @@ elif [[ -n $timezone ]]; then
 	if [[ $timezone == true ]]; then
 		echo "${blu}${bol}"
 		echo "Please, enter a valid Timezone for Ubuntu and PHP. ${end}"
-		echo "${blu}${dim}http://php.net/manual/en/timezones.php ${end}"
+		echo "${blu}${dim}https://www.php.net/manual/en/timezones.php ${end}"
 		echo ""
 		read -p "${blu}Timezone: ${end}" timezone
 		echo ""
 	fi
-	conf_write timezone $timezone
-	set_timezone
+	
+	# Check first here to not overwrite a valid good value with a wrong value.
+	if [[ -n $timezone ]] && grep -Fxq $timezone /opt/webinoly/lib/timezone.dat; then
+		conf_write timezone $timezone
+		set_timezone
+	else
+		echo "${red}Timezone not found or not valid!${end}"
+		exit 1
+	fi
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 
@@ -114,12 +129,12 @@ elif [[ -n $blockip ]]; then
 	nginx_blockip
 
 
-elif [[ -n $conf_value ]]; then
-	if [[ -n $dyn_var && $dyn_var =~ ^[A-Za-z\-]+$ ]]; then
-		[[ $conf_value == "NeverMatchString" ]] && read -p "${blu}Enter a value for '${dyn_var}': ${end}" conf_value
-		if [[ -n $conf_value ]]; then
-			conf_write $dyn_var $conf_value
-			echo "${gre}Configuration successfully updated!${end}"
+elif [[ -n $dynvar ]]; then
+	if [[ -n $dynvar && $dynvar =~ ^[A-Za-z\-]+$ ]]; then
+		[[ -z $value ]] && read -p "${blu}Enter a value for '${dynvar}': ${end}" value
+		if [[ -n $value ]]; then
+			conf_write $dynvar "$value"
+			echo "${gre}Configuration successfully updated! ${dim}(${dynvar}:$(conf_read $dynvar))${end}" # Retrive the value to really be sure!
 		else
 			echo "${red}[ERROR] Please, enter a valid value!${end}"
 			exit 1
@@ -138,7 +153,7 @@ elif [[ -n $default_site ]]; then
 	
 elif [[ -n $mysql_password ]]; then
 	if [[ $(conf_read mysql) != "true" ]]; then
-		echo "${red}[ERROR] Seems like MySQL is not installed!${end}"
+		echo "${red}[ERROR] Seems like MySQL/MariaDB is not installed!${end}"
 		exit 1
 	elif [[ $(check_mysql_connection localhost) != "true" ]]; then
 		exit 1
@@ -169,7 +184,7 @@ elif [[ -n $smtp ]]; then
 
 
 elif [[ -n $backup ]]; then
-	[[ $import =~ ^(true|stack|full)$ ]] || check_for_nginx_tool_bkp -ask
+	[[ $import =~ ^(true|stack|full)$ || $backup == "local" ]] || check_for_nginx_tool_bkp -ask
 	
 	if [[ -n $list && -z $add_db_pre ]]; then
 		bkp_s3_list
@@ -257,24 +272,6 @@ elif [[ -n $info ]]; then
 	nginx_not="true" # Nginx-Reload not-needed.
 
 
-elif [[ -n $header_referrer ]]; then
-	http_header_referrer
-elif [[ -n $header_hsts ]]; then
-	http_header_hsts
-elif [[ -n $header_csp ]]; then
-	http_header_csp
-elif [[ -n $header_permissions_policy ]]; then
-	http_header_permissions_policy
-elif [[ -n $header_cache_control ]]; then
-	http_header_cache_control
-elif [[ -n $header_robots ]]; then
-	http_header_robots
-elif [[ -n $header_xfo ]]; then
-	http_header_xfo
-elif [[ -n $header_xcto ]]; then
-	http_header_xcto
-elif [[ -n $header_xssp ]]; then
-	http_header_xssp
 elif [[ -n $custom_headers ]]; then
 	http_header_custom
 
@@ -282,22 +279,14 @@ elif [[ -n $custom_headers ]]; then
 elif [[ -n $query_string_cache || -n $query_string_never_cache || -n $skip_cache || -n $skip_cookie_cache ]]; then
 	check_for_nginx
 	custom_cache_global
+elif [[ -n $query_string_cache_default ]]; then
+	echo "${red}[ERROR] This option (-query-string-cache-default) is only enabled for specific sites using Custom Cache!"
+	echo "${blu}${dim}The option you are looking for is only available in the Webinoly configuration file. (wpcache-query-strings)${end}"
+	exit 1
 
 
 elif [[ -n $email ]]; then
 	email_update
-	nginx_not="true" # Nginx-Reload not-needed.
-	
-	
-elif [[ -n $external_db_save ]]; then
-	ext_db_save
-	nginx_not="true" # Nginx-Reload not-needed.
-	
-
-elif [[ -n $db_role_default ]]; then
-	db_role_check $db_role_default
-	conf_write dbrole $db_role_default
-	echo "${gre}Default role for Database creation has been set to '${db_role_default}' successfully! ${end}"
 	nginx_not="true" # Nginx-Reload not-needed.
 	
 	
@@ -316,4 +305,5 @@ fi
 
 [[ $(conf_read nginx) == "true" && -z $nginx_not ]] && sudo systemctl reload nginx
 [[ -n $err_cont ]] && exit 1
+[[ -z $ads_block ]] && ads_donate
 api-events_update wye

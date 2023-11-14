@@ -26,7 +26,7 @@ if [[ -n $wp || -n $mysql ]]; then
 
 	# Check for saved DB external data
 	if [[ ( $wp == "true" || $mysql == "true" ) && -n $(conf_read external-dbh) && -n $(conf_read external-dbu) && -n $(conf_read external-dbp) ]]; then
-		[[ -n $domain ]] && dona=$(echo $domain | sed "s/[^0-9A-Za-z]/_/g") || dona="Webinoly_$(pwgen -s -1)"
+		[[ -n $domain ]] && dona=$(echo $domain$subfolder | sed "s/[^0-9A-Za-z]/_/g") || dona="Webinoly_$(pwgen -s -1)"
 		
 		if [[ -n $(conf_read external-dbh) && -n $(conf_read external-dbx) ]]; then
 			exth="$(conf_read external-dbh):$(conf_read external-dbx)"
@@ -100,10 +100,12 @@ fi
 if [[ -n $subfolder && ! ( $subfolder =~ ^\/([A-Za-z0-9_\/\-]+)?[^\/]$ ) ]]; then
 	echo "${red}[ERROR] Please, enter a valid value for subfolder!${end}"
 	exit 1
+# Only these commands are supported with subfolders (Parked is not supported, for instance)
 elif [[ -n $subfolder && -z $delete && -z $cache && -z $multisite_convert && -z $clone_from && -z $replace_content && -z $wp && -z $html && -z $php && -z $mysql && -z $proxy && -z $env && -z $info ]]; then
 	echo "${red}[ERROR] Subfolder option not supported!${end}"
 	exit 1
-elif [[ -n $subfolder && ( $cache == "on" || -n $multisite_convert || -n $replace_content ) && $(is_subfolder $domain $subfolder) != "wp" ]]; then
+# Clone-from empty is here to allow -cache=on when cloning a site
+elif [[ -n $subfolder && -z $wp && ( $cache == "on" || -n $multisite_convert || -n $replace_content || -n $env ) && $(is_subfolder $domain $subfolder) != "wp" && -z $clone_from ]]; then
 	echo "${red}[ERROR] Subfolder not found or is not a WP site!${end}"
 	exit 1
 else
@@ -125,10 +127,11 @@ if [[ -n $delete_all ]]; then
 elif [[ -n $mysql || ( -n $php && -n $domain ) ]]; then
 	if [[ -n $domain ]]; then
 		full_empty_not_allowed
-		if [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $(is_subfolder $domain $subfolder) != "false" ]]; then
+		if [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $(is_subfolder $domain $subfolder) != "false" && $(is_subfolder $domain $subfolder) != "empty" ]]; then
 			echo "${red}[ERROR] Subfolder${blu} $subfolder ${red}already exists!${end}"
 			exit 1
-		elif [[ -n $subfolder ]]; then	
+		elif [[ -n $subfolder ]]; then
+			[[ $(is_subfolder $domain $subfolder) == "empty" ]] && echo "${dim}[INFO] Subfolder already exists, but it's empty!${end}"
 			[[ ! -f /etc/nginx/sites-available/$domain ]] && create_empty_site
 			php_subfolder
 			sudo mkdir -p /var/www/$domain/htdocs$subfolder
@@ -160,7 +163,7 @@ elif [[ -n $empty && -n $domain ]]; then
 elif [[ -n $html && -n $domain ]]; then
 	full_empty_not_allowed
 	if [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $(is_subfolder $domain $subfolder) != "false" ]]; then
-		echo "${red}[ERROR] Subfolder${blu} $subfolder ${red}already exists!${end}"
+		echo "${red}[ERROR] Subfolder${blu} $subfolder ${red}already exists! ${dim}(Just put the HTML files in it, a separate conf is not needed)${end}"
 		exit 1
 	fi
 	
@@ -196,8 +199,15 @@ elif [[ -n $wp && -n $domain ]]; then
 		[[ -n $env ]] && sudo site $domain -env=$env
 	else
 		if [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $type == [123] && $(is_subfolder $domain $subfolder) != "false" ]]; then
-			echo "${red}[ERROR] Subfolder${blu} $subfolder ${red}already exists!${end}"
-			exit 1
+			# Check if subfolder is empty!
+			if [[ $(is_subfolder $domain $subfolder) == "empty" ]]; then
+				# Install WP in an empty folder!
+				echo "${dim}[INFO] Subfolder already exists, but it's empty!${end}"
+				wpinstall
+			else
+				echo "${red}[ERROR] Subfolder${blu} $subfolder ${red}already exists and it's not empty!${end}"
+				exit 1
+			fi
 		elif [[ -f /etc/nginx/sites-available/$domain && -n $subfolder && $type == [123] ]]; then
 			wpinstall
 		else
@@ -216,9 +226,7 @@ elif [[ -n $multisite_convert && -f /etc/nginx/sites-available/$domain ]]; then
 		exit 1
 	fi
 	
-	# We need to call this function in the parent shell to preserve variables and avoid asking two or more times for the same values in case of external db.
-	wp_conf_retrieve $domain true false $subfolder 	
-	
+	wp_conf_retrieve $domain false false $subfolder
 	if [[ $(is_wp_installed $domain $subfolder) != "true" ]]; then
 		echo "${red}[ERROR] WordPress site${blu} $domain$subfolder ${red}is empty and still not configured!${end}"
 		exit 1
@@ -280,24 +288,6 @@ elif [[ -n $redirection && -f /etc/nginx/sites-available/$domain ]]; then
 	redirection_manager
 
 
-# FastCGI Cache
-elif [[ -n $cache && -f /etc/nginx/sites-available/$domain ]]; then
-	wp_cache
-
-	
-# Delete site	
-elif [[ -n $delete && -f /etc/nginx/sites-available/$domain ]]; then
-	api-events_update si6
-	if [[ $domain == "default" || $domain == $(conf_read tools-port) ]]; then
-		echo "${red}[ERROR] System sites can not be removed!${end}"
-		exit 1
-	elif [[ -n $subfolder ]]; then
-		deletesite_subfolder
-	else
-		deletesite
-	fi
-
-
 # SSL (Letsencrypt)
 elif [[ -n $ssl ]]; then
 	if [[ $ssl == "renew" && -z $domain ]]; then
@@ -339,7 +329,10 @@ elif [[ -n $ssl ]]; then
 				exit 1
 			elif [[ $domain == *."$add_to_wildcard" ]]; then
 				ssl_nginx
-				[[ $(is_wp $domain) == "true" ]] && edit_wp_db_url $domain "https://${domain}"
+				
+				# No need of force-redirect check because this site is always subdomain and subdomains are not supported in force-redirect.
+				[[ $(is_wp $domain) == "true" ]] && wp_db_update $domain "https://${domain}"
+				
 				echo "${gre}Your site${blu} $domain ${gre}have been successfully added to the${blu} $add_to_wildcard ${gre}wildcard cert.${end}"
 			else
 				echo "${red}[ERROR] Seems like your site is not a valid subdomain!${end}"
@@ -385,14 +378,14 @@ elif [[ -n $clone_from ]]; then
 	fi
 	
 	if [[ $(is_wp $clone_from $subfolder) == "true" ]]; then
-		#We need to call this function in the parent shell to preserve variables and avoid asking two times for the same values in case of external db.
-		wp_conf_retrieve $clone_from true false $subfolder 
+		wp_conf_retrieve $clone_from true false $subfolder
 		iswpclone="true"
 		
-		if [[ -z $wp_dbhost || -z $wp_dbname || -z $wp_dbpref ]]; then
+		if [[ -z $wp_dbhost ||-z $wp_dbhost_host || -z $wp_dbname || -z $wp_dbpref ]]; then
 			echo "${red}[ERROR] Can not retrieve WP data ${dim}(WP Configuration corrupted)!${end}"
 			exit 1
-		elif [[ ( $wp_dbhost == "localhost" && $(check_mysql_connection localhost) != "true" ) || ( $wp_dbhost != "localhost" && $(check_mysql_connection $extdb_url $extdb_port $extdb_user $extdb_pass) != "true" ) ]]; then
+		elif [[ ( $wp_dbhost_host == "localhost" && $(check_mysql_connection localhost $mysql_param) != "true" ) || ( $wp_dbhost_host != "localhost" && $(check_mysql_connection $wp_dbhost_host $wp_dbhost_port any -login-file -master-admin) != "true" ) ]]; then
+			echo "${red}[ERROR] Database connection failed! ${dim}($wp_dbhost)${end}"
 			exit 1
 		elif [[ $(is_wp_multisite $clone_from $subfolder) != "false" ]]; then
 			echo "${red}[ERROR] WordPress Multisite can not be cloned!${end}"
@@ -400,6 +393,9 @@ elif [[ -n $clone_from ]]; then
 		elif [[ $(is_wp_installed $clone_from $subfolder) != "true" ]]; then
 			echo "${dim}[INFO] WordPress is empty and still not configured in ${clone_from}${subfolder} site!${end}"
 		fi
+	elif [[ -n $subfolder && $(is_subfolder $clone_from $subfolder) == "false" ]]; then
+		echo "${red}[ERROR] Subfolder not found!${end}"
+		exit 1
 	fi
 	
 	cloning_site
@@ -412,21 +408,32 @@ elif [[ -n $replace_content && -f /etc/nginx/sites-available/$domain ]]; then
 		exit 1
 	fi
 	
-	#We need to call this function in the parent shell to preserve variables and avoid asking two times for the same values in case of external db.
-	wp_conf_retrieve $domain true true $subfolder
-	
-	if [[ $(is_wp_installed $domain $subfolder) != "true" ]]; then
-		echo "${red}[ERROR] WordPress is empty and still not configured in ${domain}${subfolder} site!${end}"
-		exit 1
-	else
-		wp_replace_content
-	fi
+	wp_replace_content
 
 
-# WordPress Environment Type
+# WordPress Environment Type (should be here after cloning site for precedence)
 elif [[ -n $env && -f /etc/nginx/sites-available/$domain ]]; then
 	wp_env_type
 	nginx_not="true" # Nginx-Reload not-needed.
+# ENV should be always before cache for precedence
+
+
+# FastCGI Cache
+elif [[ -n $cache && -f /etc/nginx/sites-available/$domain ]]; then
+	wp_cache
+
+
+# Delete site (should be here after cache for precedence)
+elif [[ -n $delete && -f /etc/nginx/sites-available/$domain ]]; then
+	api-events_update si6
+	if [[ $domain == "default" || $domain == $ADMIN_TOOLS_SITE ]]; then
+		echo "${red}[ERROR] System sites can not be removed!${end}"
+		exit 1
+	elif [[ -n $subfolder ]]; then
+		deletesite_subfolder
+	else
+		deletesite
+	fi
 	
 
 # List Sites
@@ -454,4 +461,5 @@ fi
 
 shopt -u extglob
 [[ $(conf_read nginx) == "true" && -z $nginx_not && $(conf_read nginx-reload) != "false" ]] && sudo systemctl reload nginx
+ads_donate
 api-events_update sie

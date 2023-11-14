@@ -1,4 +1,11 @@
-# WebinolyStart - Don't delete
+# Webinoly (This configuration file is only for internal use)
+#####################################################################################################
+# Please, DO NOT MODIFY this file, all the changes will be lost.                                    #
+# If you need to add/modify any of the existing rules, here: /etc/sysctl.conf                       #
+# Please, read the documentation: https://webinoly.com/documentation/                               #
+#####################################################################################################
+
+
 
 #######################################
 ### GENERAL SYSTEM SECURITY OPTIONS ###
@@ -42,7 +49,8 @@ kernel.dmesg_restrict = 1
 kernel.kptr_restrict = 1
 
 # Sets the time before the kernel considers migrating a proccess to another core
-kernel.sched_migration_cost_ns = 5000000
+# This variable is no longer in sysctl, moved to: /sys/kernel/debug/sched/migration_cost_ns
+#kernel.sched_migration_cost_ns = 5000000
 
 # Group tasks by TTY
 kernel.sched_autogroup_enabled = 0
@@ -290,5 +298,3 @@ net.ipv4.tcp_fastopen = 3
 # This will enusre that immediatly subsequent connections use the new values
 net.ipv4.route.flush = 1
 net.ipv6.route.flush = 1
-
-# WebinolyEnd
